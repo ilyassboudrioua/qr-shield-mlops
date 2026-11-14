@@ -28,7 +28,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from scipy.sparse import csr_matrix, hstack
 
-from src.enquete import JEUNE, age_domaine, imitation_de_marque
+from src.enquete import JEUNE, POPULAIRES, age_domaine, domaine_enregistre, imitation_de_marque
 
 MOTS_SUSPECTS = ["login", "verify", "account", "update", "secure", "bank",
                  "signin", "confirm", "password", "wallet", "support", "billing"]
@@ -160,8 +160,9 @@ def verifier_signature(texte: str, registre: dict):
 class DetecteurUnifie:
     """Une seule entrée (lien ou image de QR code), un seul modèle pour tous les liens."""
 
-    def __init__(self, dossier: Path, fichier_registre: Path = None):
+    def __init__(self, dossier: Path, fichier_registre: Path = None, base_menaces=None):
         dossier = Path(dossier)
+        self.base = base_menaces
         self.registre = {}
         if fichier_registre and Path(fichier_registre).exists():
             self.registre = json.load(open(fichier_registre, encoding="utf-8"))
@@ -182,7 +183,7 @@ class DetecteurUnifie:
         texte = texte.strip()
         signature = verifier_signature(texte, self.registre)
         if signature is None:
-            return self._analyser_ml(texte)
+            return self._avec_menaces(self._analyser_ml(texte))
 
         lien = signature["lien"]
         if signature["statut"] == "valide":
@@ -205,6 +206,18 @@ class DetecteurUnifie:
                  else f"le domaine n'appartient pas à « {signature['nom']} »")
         resultat["raisons"] = [{"raison": motif, "contribution": 1.0}] + resultat.get("raisons", [])
         resultat["message"] = "Ce QR code se présente comme signé, mais il n'a pas pu être vérifié. Prudence."
+        return resultat
+
+    def _avec_menaces(self, resultat: dict) -> dict:
+        """Si le lien est une menace connue (signalée plusieurs fois par les utilisateurs) : DANGEREUX."""
+        if self.base is None or not resultat.get("lien_normalise"):
+            return resultat
+        etat = self.base.etat(resultat["lien_normalise"])
+        resultat["signalements"] = etat
+        if etat["menace_connue"] and not resultat.get("enquete_populaire"):
+            resultat["verdict"] = "DANGEREUX"
+            resultat["raisons"] = [{"raison": f"menace connue : signalé {etat['phishing']} fois comme phishing "
+                                              "par les utilisateurs", "contribution": None, "origine": "signalements"}] + resultat["raisons"]
         return resultat
 
     def _analyser_ml(self, texte: str) -> dict:
@@ -233,10 +246,11 @@ class DetecteurUnifie:
                             "detail": f"domaine créé il y a seulement {age} jour(s)"})
         if alertes:
             verdict = "DANGEREUX" if score >= self.seuils[0] else ("SUSPECT" if verdict == "SÛR" else verdict)
-            raisons = [{"raison": a["detail"], "contribution": None} for a in alertes] + \
+            raisons = [{"raison": a["detail"], "contribution": None, "origine": "enquête sur le domaine"} for a in alertes] + \
                       [r for r in raisons if r["contribution"] > 0]
 
         return {"verdict": verdict, "score": round(score, 4), "lien_normalise": url, "enquete": alertes, "age_domaine_jours": age,
+                "enquete_populaire": domaine_enregistre(hote) in POPULAIRES,
                 "modele": "modèle unifié (liens + QR codes)",
                 "seuils": {"suspect": round(self.seuils[0], 3), "dangereux": round(self.seuils[1], 3)},
                 "raisons": raisons, "message": "Le lien n'a pas été ouvert : seul son texte a été analysé."}

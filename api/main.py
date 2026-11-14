@@ -14,20 +14,25 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
-from src.detecteurs import DetecteurUnifie
+from src.detecteurs import DetecteurUnifie, normaliser
+from src.menaces import BaseMenaces
+from src.surveillance import tableau_de_bord
 
 RACINE = Path(__file__).resolve().parent.parent
 DOSSIER_MODELES = Path(os.environ.get("QRS_MODELES", RACINE / "models"))
 DOSSIER_LOGS = Path(os.environ.get("QRS_LOGS", RACINE / "logs"))
 FICHIER_REGISTRE = Path(os.environ.get("QRS_REGISTRE", RACINE / "registre" / "emetteurs.json"))
+FICHIER_MENACES = Path(os.environ.get("QRS_MENACES", RACINE / "donnees" / "menaces.db"))
 DOSSIER_LOGS.mkdir(exist_ok=True)
 TAILLE_MAX_IMAGE = 5 * 1024 * 1024      # 5 Mo
 
 app = FastAPI(title="QR-Shield API",
               description="Un lien ou une image de QR code : un seul module, un seul modèle. Rien n'est ouvert.")
 
-detecteur = DetecteurUnifie(DOSSIER_MODELES, FICHIER_REGISTRE)
+base = BaseMenaces(FICHIER_MENACES)
+detecteur = DetecteurUnifie(DOSSIER_MODELES, FICHIER_REGISTRE, base)
 
 
 def journaliser(entree, contenu: bytes, resultat: dict, debut: float):
@@ -64,3 +69,34 @@ async def analyser(lien: Optional[str] = Form(None), image: Optional[UploadFile]
     if lien and lien.strip():
         return journaliser("lien", lien.encode(), detecteur.analyser_lien(lien), debut)
     raise HTTPException(400, "Envoyez un lien ou une image de QR code.")
+
+
+class Signalement(BaseModel):
+    lien: str
+    avis: str                       # "phishing" ou "sur"
+    verdict_portail: Optional[str] = None
+    score: Optional[float] = None
+    canal: str = "portail"
+
+
+@app.post("/signaler")
+def signaler(s: Signalement):
+    """L'utilisateur corrige le portail : ce lien est en fait du phishing, ou c'est une fausse alerte."""
+    if s.avis not in ("phishing", "sur"):
+        raise HTTPException(400, "avis doit valoir « phishing » ou « sur ».")
+    lien = normaliser(s.lien.split("#qrs=")[0])
+    if not lien:
+        raise HTTPException(400, "Lien vide.")
+    etat = base.signaler(lien, s.avis, s.verdict_portail, s.score, s.canal)
+    return {"merci": True, "lien_normalise": lien, **etat}
+
+
+@app.get("/statistiques")
+def statistiques():
+    return base.statistiques()
+
+
+@app.get("/surveillance")
+def surveillance():
+    """Tableau de bord MLOps : volume, verdicts, temps de réponse, signalements, dérive des scores."""
+    return tableau_de_bord(DOSSIER_LOGS / "predictions.jsonl", base.statistiques())
