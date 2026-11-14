@@ -1,5 +1,5 @@
 """
-API du portail QR-Shield (FastAPI).
+API du portail QR-Shield (FastAPI) : une seule route pour un lien OU une image de QR code.
 
 Lancer depuis la racine du projet :
     uvicorn api.main:app --port 8000
@@ -11,11 +11,11 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
-from src.detecteurs import DetecteurLiens, DetecteurQR
+from src.detecteurs import DetecteurUnifie
 
 RACINE = Path(__file__).resolve().parent.parent
 DOSSIER_MODELES = Path(os.environ.get("QRS_MODELES", RACINE / "models"))
@@ -24,17 +24,16 @@ DOSSIER_LOGS.mkdir(exist_ok=True)
 TAILLE_MAX_IMAGE = 5 * 1024 * 1024      # 5 Mo
 
 app = FastAPI(title="QR-Shield API",
-              description="Détection de liens de phishing et de QR codes piégés (quishing). Rien n'est ouvert.")
+              description="Un lien ou une image de QR code : un seul module, un seul modèle. Rien n'est ouvert.")
 
-liens = DetecteurLiens(DOSSIER_MODELES)
-qr = DetecteurQR(DOSSIER_MODELES, liens)
+detecteur = DetecteurUnifie(DOSSIER_MODELES)
 
 
-def journaliser(route, contenu: bytes, resultat: dict, debut: float):
+def journaliser(entree, contenu: bytes, resultat: dict, debut: float):
     """Enregistre chaque prédiction (sans le contenu lui-même, seulement son empreinte) pour le suivi MLOps."""
     ligne = {
         "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "route": route,
+        "entree": entree,
         "empreinte": hashlib.sha256(contenu).hexdigest()[:16],
         "verdict": resultat.get("verdict"),
         "score": resultat.get("score"),
@@ -47,26 +46,20 @@ def journaliser(route, contenu: bytes, resultat: dict, debut: float):
     return resultat
 
 
-class DemandeLien(BaseModel):
-    url: str
-
-
 @app.get("/sante")
 def sante():
-    return {"etat": "ok", "liens": True, "qr": True}
+    return {"etat": "ok", "modele": detecteur.infos["modele"]}
 
 
-@app.post("/url")
-def analyser_lien(demande: DemandeLien):
+@app.post("/analyser")
+async def analyser(lien: Optional[str] = Form(None), image: Optional[UploadFile] = File(None)):
+    """Envoyer soit un lien (champ « lien »), soit une image de QR code (champ « image »)."""
     debut = time.perf_counter()
-    resultat = liens.analyser(demande.url)
-    return journaliser("url", demande.url.encode(), resultat, debut)
-
-
-@app.post("/qr")
-async def analyser_qr(image: UploadFile = File(...)):
-    debut = time.perf_counter()
-    contenu = await image.read()
-    if len(contenu) > TAILLE_MAX_IMAGE:
-        raise HTTPException(413, "Image trop lourde (5 Mo maximum).")
-    return journaliser("qr", contenu, qr.analyser(contenu), debut)
+    if image is not None and image.filename:
+        contenu = await image.read()
+        if len(contenu) > TAILLE_MAX_IMAGE:
+            raise HTTPException(413, "Image trop lourde (5 Mo maximum).")
+        return journaliser("image", contenu, detecteur.analyser_image(contenu), debut)
+    if lien and lien.strip():
+        return journaliser("lien", lien.encode(), detecteur.analyser_lien(lien), debut)
+    raise HTTPException(400, "Envoyez un lien ou une image de QR code.")
