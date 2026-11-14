@@ -7,6 +7,7 @@ Partie 1 (hors ligne) : imitation de marques connues, internationales et marocai
   - lettres déguisées, ou homoglyphes                         (pаypal.com avec un « а » cyrillique)
 """
 import unicodedata
+from pathlib import Path
 
 import tldextract
 
@@ -45,6 +46,13 @@ MARQUES = {
     "binance": ["binance.com"],
     "coinbase": ["coinbase.com"],
 }
+# marques qui ont un site officiel dans beaucoup de pays (amazon.it, google.de, dhl.ma...)
+MARQUES_PAYS = {"amazon", "google", "dhl", "jumia", "apple", "microsoft", "netflix", "paypal"}
+
+# domaines très visités (liste Tranco) : jamais signalés pour une simple faute de frappe
+FICHIER_POPULAIRES = Path(__file__).resolve().parent.parent / "registre" / "domaines_populaires.txt"
+POPULAIRES = set(FICHIER_POPULAIRES.read_text(encoding="utf-8").split()) if FICHIER_POPULAIRES.exists() else set()
+
 COURTES = {m for m in MARQUES if len(m) < 5}   # dhl, iam, inwi, cnss, oncf : seulement en mot entier
 
 # mots « appâts » qu'on colle souvent à une marque : paypalsecure, amazonlogin, cihbankverify...
@@ -99,7 +107,8 @@ def que_des_appats(reste: str) -> bool:
 
 def cibles(marque: str) -> set:
     """Les formes à comparer : le nom de la marque et le nom de ses domaines officiels (attijariwafabank...)."""
-    return {marque} | {EXTRACTEUR(d).domain for d in MARQUES[marque]}
+    formes = {marque} | {EXTRACTEUR(d).domain for d in MARQUES[marque]}
+    return {f for f in formes if len(f) >= 5}          # fb, live... trop courts pour une comparaison fiable
 
 
 def decoder_punycode(hote: str) -> str:
@@ -125,6 +134,10 @@ def imitation_de_marque(hote: str) -> list:
     for marque, officiels in MARQUES.items():
         if enregistre in officiels:
             return []                                     # c'est le vrai site de la marque
+        if (marque in MARQUES_PAYS and len(ext.suffix.split(".")[-1]) == 2
+                and ext.domain in {EXTRACTEUR(d).domain for d in officiels}):
+            return []                                     # site officiel d'un autre pays (amazon.it)
+    populaire = enregistre in POPULAIRES
     for marque, officiels in MARQUES.items():
         for mot in mots + [colle]:
             sq = squelette(mot)
@@ -138,8 +151,9 @@ def imitation_de_marque(hote: str) -> list:
                 alertes.append({"type": "homoglyphe", "marque": marque,
                                 "detail": f"« {mot} » imite « {marque} » avec des lettres déguisées"})
                 break
-            if marque not in COURTES and any(
+            if marque not in COURTES and not populaire and len(mot) >= 5 and any(
                     abs(len(sq) - len(c)) <= 2 and 0 < distance(sq, c) <= (1 if len(c) < 8 else 2)
+                    and (len(c) >= 8 or len(sq) >= len(c))     # « cloud » n'est pas une faute de « icloud »
                     for c in cibles(marque)):
                 alertes.append({"type": "typosquatting", "marque": marque,
                                 "detail": f"« {mot} » ressemble à « {marque} » (faute de frappe volontaire)"})
