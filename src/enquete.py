@@ -5,9 +5,17 @@ Partie 1 (hors ligne) : imitation de marques connues, internationales et marocai
   - la marque apparaît dans un domaine qui n'est pas le sien  (paypal-secure-login.top)
   - faute de frappe volontaire, ou typosquatting              (paypa1.com, attijariwafabnk.com)
   - lettres déguisées, ou homoglyphes                         (pаypal.com avec un « а » cyrillique)
+
+Partie 2 (en ligne) : âge du domaine, demandé au registre officiel des noms de domaine (RDAP).
+  On interroge le registre, jamais le site lui-même. Un site de phishing vit souvent quelques jours :
+  un domaine créé il y a moins de 30 jours est un signal fort.
 """
+import os
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
+
+import requests
 
 import tldextract
 
@@ -166,3 +174,36 @@ def imitation_de_marque(hote: str) -> list:
                                 "detail": f"« {mot} » ressemble à « {marque} » (faute de frappe volontaire)"})
                 break
     return alertes
+
+
+# ---------------------------------------------------------------- partie 2 : âge du domaine (en ligne)
+EN_LIGNE = os.environ.get("QRS_ENLIGNE", "1") != "0"     # QRS_ENLIGNE=0 pour travailler sans internet
+JEUNE = 30                                               # jours
+_cache_age = {}
+
+
+def domaine_enregistre(hote: str) -> str:
+    ext = EXTRACTEUR(decoder_punycode(hote.lower().strip(".")))
+    return f"{ext.domain}.{ext.suffix}" if ext.suffix else ""
+
+
+def age_domaine(hote: str):
+    """Âge du domaine en jours, d'après le registre RDAP (None si inconnu, hors ligne ou trop lent)."""
+    domaine = domaine_enregistre(hote)
+    if not EN_LIGNE or not domaine or domaine in POPULAIRES:
+        return None
+    if domaine in _cache_age:
+        return _cache_age[domaine]
+    age = None
+    try:
+        r = requests.get(f"https://rdap.org/domain/{domaine.encode('idna').decode()}", timeout=4,
+                         headers={"Accept": "application/rdap+json"})
+        if r.ok:
+            for e in r.json().get("events", []):
+                if e.get("eventAction") == "registration":
+                    cree = datetime.fromisoformat(e["eventDate"].replace("Z", "+00:00"))
+                    age = (datetime.now(timezone.utc) - cree).days
+    except (requests.RequestException, ValueError, KeyError):
+        age = None
+    _cache_age[domaine] = age
+    return age
