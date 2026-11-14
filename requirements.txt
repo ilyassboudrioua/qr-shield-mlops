@@ -12,3 +12,5 @@ streamlit
 requests
 cryptography
 qrcode[pil]
+python-telegram-bot==21.6
+tldextract
