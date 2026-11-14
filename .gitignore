@@ -222,3 +222,4 @@ models/
 logs/
 cles_privees/
 donnees/
+.env

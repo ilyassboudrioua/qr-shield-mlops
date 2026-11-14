@@ -1,0 +1,12 @@
+.venv/
+.git/
+cles_privees/
+models/
+donnees/
+logs/
+notebooks/
+archives/
+attaques/
+*.png
+__pycache__/
+.env

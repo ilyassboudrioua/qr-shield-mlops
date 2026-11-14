@@ -1,0 +1,45 @@
+# Lancer tout le portail :           docker compose up --build
+# Avec le bot Telegram en plus :     docker compose --profile telegram up --build
+#   (le jeton se met dans un fichier .env à côté de ce fichier : QRS_TELEGRAM_TOKEN=...)
+services:
+  api:
+    build: .
+    image: qr-shield
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro          # modèles entraînés (lecture seule)
+      - ./logs:/app/logs                 # journal des prédictions (surveillance)
+      - ./donnees:/app/donnees           # base de menaces (signalements)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/sante')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    image: qr-shield
+    pull_policy: never                   # image construite par le service api (pas sur Docker Hub)
+    command: ["streamlit", "run", "app/app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+    ports:
+      - "8501:8501"
+    environment:
+      - QRS_API=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  bot:
+    image: qr-shield
+    pull_policy: never
+    command: ["python", "bot/bot_telegram.py"]
+    profiles: ["telegram"]
+    environment:
+      - QRS_API=http://api:8000
+      - QRS_TELEGRAM_TOKEN=${QRS_TELEGRAM_TOKEN:-}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
