@@ -28,6 +28,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from scipy.sparse import csr_matrix, hstack
 
+from src.enquete import imitation_de_marque
+
 MOTS_SUSPECTS = ["login", "verify", "account", "update", "secure", "bank",
                  "signin", "confirm", "password", "wallet", "support", "billing"]
 
@@ -222,7 +224,14 @@ class DetecteurUnifie:
         for r in raisons:
             r["raison"] = nom_lisible(r["raison"], valeurs[r["raison"]])
 
-        return {"verdict": verdict, "score": round(score, 4), "lien_normalise": url,
+        # enquête sur le domaine : imitation d'une marque connue
+        alertes = imitation_de_marque(url.split("/")[0].split(":")[0])
+        if alertes:
+            verdict = "DANGEREUX" if score >= self.seuils[0] else ("SUSPECT" if verdict == "SÛR" else verdict)
+            raisons = [{"raison": a["detail"], "contribution": None} for a in alertes] + \
+                      [r for r in raisons if r["contribution"] > 0]
+
+        return {"verdict": verdict, "score": round(score, 4), "lien_normalise": url, "enquete": alertes,
                 "modele": "modèle unifié (liens + QR codes)",
                 "seuils": {"suspect": round(self.seuils[0], 3), "dangereux": round(self.seuils[1], 3)},
                 "raisons": raisons, "message": "Le lien n'a pas été ouvert : seul son texte a été analysé."}

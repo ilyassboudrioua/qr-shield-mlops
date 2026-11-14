@@ -28,6 +28,7 @@ def afficher(resultat: dict):
     st.markdown(
         f"<div style='padding:14px 18px;border-radius:6px;background:{couleur};color:white;"
         f"font-size:22px;font-weight:700'>{verdict}{texte_score}</div>", unsafe_allow_html=True)
+
     if resultat.get("emetteur"):
         st.success(f"Émetteur officiel vérifié : {resultat['emetteur']}")
     if resultat.get("contenu_qr"):
@@ -42,7 +43,8 @@ def afficher(resultat: dict):
     if raisons:
         st.write("**Pourquoi ?**")
         for r in raisons:
-            st.write(f"- {r['raison']} ({r['contribution']:+.2f})")
+            c = r.get("contribution")
+            st.write(f"- {r['raison']}" + (f" ({c:+.2f})" if c is not None else " (enquête sur le domaine)"))
 
     details = []
     if resultat.get("modele"):
