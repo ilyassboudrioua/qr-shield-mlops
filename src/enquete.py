@@ -30,13 +30,13 @@ MARQUES = {
     # international
     "paypal": ["paypal.com", "paypal.me"],
     "google": ["google.com", "google.fr", "google.co.ma", "gmail.com", "youtube.com"],
-    "microsoft": ["microsoft.com", "live.com", "outlook.com", "office.com", "microsoftonline.com"],
-    "outlook": ["outlook.com", "live.com", "office.com", "microsoft.com"],
-    "office365": ["office.com", "microsoft.com", "microsoftonline.com"],
+    "microsoft": ["microsoft.com", "live.com", "outlook.com", "office.com", "office365.com", "microsoftonline.com"],
+    "outlook": ["outlook.com", "live.com", "office.com", "office365.com", "microsoft.com"],
+    "office365": ["office.com", "office365.com", "microsoft.com", "microsoftonline.com"],
     "apple": ["apple.com", "icloud.com"],
     "icloud": ["icloud.com", "apple.com"],
     "amazon": ["amazon.com", "amazon.fr", "amazon.de", "amazon.co.uk"],
-    "netflix": ["netflix.com"],
+    "netflix": ["netflix.com", "netflix.net"],
     "facebook": ["facebook.com", "fb.com"],
     "instagram": ["instagram.com"],
     "whatsapp": ["whatsapp.com"],
@@ -111,6 +111,13 @@ def cibles(marque: str) -> set:
     return {f for f in formes if len(f) >= 5}          # fb, live... trop courts pour une comparaison fiable
 
 
+def melange_d_alphabets(texte: str) -> bool:
+    """Vrai si le texte mélange l'alphabet latin avec le cyrillique, le grec ou l'arménien (ruse classique).
+    Un domaine écrit entièrement en japonais ou en suédois (försäkring.se) n'est pas une ruse."""
+    alphabets = {unicodedata.name(c, "?").split()[0] for c in texte if c.isalpha()}
+    return "LATIN" in alphabets and bool(alphabets & {"CYRILLIC", "GREEK", "ARMENIAN"})
+
+
 def decoder_punycode(hote: str) -> str:
     try:
         return hote.encode("ascii").decode("idna")
@@ -122,10 +129,10 @@ def imitation_de_marque(hote: str) -> list:
     """Renvoie la liste des alertes d'imitation pour un nom d'hôte (vide si rien de suspect)."""
     hote = hote.lower().strip(".")
     alertes = []
-    if "xn--" in hote or any(ord(c) > 127 for c in hote):
-        alertes.append({"type": "punycode", "marque": None,
-                        "detail": f"nom de domaine écrit avec des caractères spéciaux ({decoder_punycode(hote)})"})
     lisible = decoder_punycode(hote)
+    if melange_d_alphabets(lisible):
+        alertes.append({"type": "punycode", "marque": None,
+                        "detail": f"nom de domaine qui mélange des alphabets différents ({lisible})"})
     ext = EXTRACTEUR(lisible)
     enregistre = f"{ext.domain}.{ext.suffix}" if ext.suffix else ext.domain
     mots = [m for m in (ext.subdomain + "." + ext.domain).replace("-", ".").replace("_", ".").split(".") if m]
