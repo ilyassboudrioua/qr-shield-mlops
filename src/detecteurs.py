@@ -5,10 +5,13 @@ Détecteur unifié du portail QR-Shield : un lien OU une image de QR code, un se
 2. Le lien (collé ou lu dans le QR code) est normalisé : sans http(s)://, sans www., sans paramètres.
 3. Un seul modèle XGBoost (entraîné sur PhreshPhish + les liens des QR codes) donne le verdict.
 4. Secours : si le QR code est illisible, un modèle analyse directement l'image (pixels).
+5. QR codes signés : si le lien porte une signature (« #qrs= »), on la vérifie avec la clé publique
+   de l'émetteur (registre/emetteurs.json). Valide = OFFICIEL ; falsifiée = DANGEREUX.
 
-Verdicts : SÛR, SUSPECT, DANGEREUX ou INDÉTERMINÉ, avec un score et les raisons (SHAP).
+Verdicts : OFFICIEL, SÛR, SUSPECT, DANGEREUX ou INDÉTERMINÉ, avec un score et les raisons (SHAP).
 Rien n'est ouvert : on analyse seulement le texte du lien ou l'image du QR code.
 """
+import base64
 import json
 import math
 import re
@@ -21,6 +24,8 @@ import joblib
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from scipy.sparse import csr_matrix, hstack
 
 MOTS_SUSPECTS = ["login", "verify", "account", "update", "secure", "bank",
@@ -119,12 +124,45 @@ def ressemble_a_un_lien(texte: str) -> bool:
     return bool(t) and " " not in t and "." in normaliser(t).split("/")[0]
 
 
+# ---------------------------------------------------------------- QR codes signés
+PREFIXE_SIGNATURE = "#qrs="
+
+
+def depuis_b64(texte: str) -> bytes:
+    return base64.urlsafe_b64decode(texte + "=" * (-len(texte) % 4))
+
+
+def verifier_signature(texte: str, registre: dict):
+    """Vérifie la signature d'un lien signé « lien#qrs=<émetteur>.<signature> ».
+    Renvoie None si le lien n'est pas signé, sinon un dict avec le statut :
+    valide, falsifie (signature fausse), inconnu (émetteur absent du registre) ou hors_domaine."""
+    if PREFIXE_SIGNATURE not in texte:
+        return None
+    lien, _, signe = texte.strip().partition(PREFIXE_SIGNATURE)
+    id_emetteur, _, signature = signe.partition(".")
+    emetteur = registre.get(id_emetteur)
+    if emetteur is None:
+        return {"statut": "inconnu", "lien": lien, "id": id_emetteur}
+    try:
+        cle = Ed25519PublicKey.from_public_bytes(depuis_b64(emetteur["cle_publique"]))
+        cle.verify(depuis_b64(signature), lien.encode("utf-8"))
+    except (InvalidSignature, ValueError):
+        return {"statut": "falsifie", "lien": lien, "id": id_emetteur, "nom": emetteur["nom"]}
+    hote = normaliser(lien).split("/")[0].split(":")[0]
+    if not any(hote == d or hote.endswith("." + d) for d in emetteur["domaines"]):
+        return {"statut": "hors_domaine", "lien": lien, "id": id_emetteur, "nom": emetteur["nom"]}
+    return {"statut": "valide", "lien": lien, "id": id_emetteur, "nom": emetteur["nom"]}
+
+
 # ---------------------------------------------------------------- détecteur unifié
 class DetecteurUnifie:
     """Une seule entrée (lien ou image de QR code), un seul modèle pour tous les liens."""
 
-    def __init__(self, dossier: Path):
+    def __init__(self, dossier: Path, fichier_registre: Path = None):
         dossier = Path(dossier)
+        self.registre = {}
+        if fichier_registre and Path(fichier_registre).exists():
+            self.registre = json.load(open(fichier_registre, encoding="utf-8"))
         self.tfidf = joblib.load(dossier / "unifie_tfidf.joblib")
         self.modele = charger_xgb(dossier, "unifie_xgb")
         self.infos = json.load(open(dossier / "unifie_infos.json", encoding="utf-8"))
@@ -140,6 +178,34 @@ class DetecteurUnifie:
     # ---------- liens
     def analyser_lien(self, texte: str) -> dict:
         texte = texte.strip()
+        signature = verifier_signature(texte, self.registre)
+        if signature is None:
+            return self._analyser_ml(texte)
+
+        lien = signature["lien"]
+        if signature["statut"] == "valide":
+            return {"verdict": "OFFICIEL", "score": None, "lien_normalise": normaliser(lien),
+                    "emetteur": signature["nom"], "modele": "signature numérique (Ed25519)",
+                    "raisons": [{"raison": f"signature valide de « {signature['nom']} »", "contribution": 0.0}],
+                    "message": f"QR code officiel vérifié : émis et signé par {signature['nom']}."}
+        if signature["statut"] == "falsifie":
+            return {"verdict": "DANGEREUX", "score": 1.0, "lien_normalise": normaliser(lien),
+                    "modele": "signature numérique (Ed25519)",
+                    "raisons": [{"raison": f"signature fausse : le lien a été modifié ou n'a pas été signé par « {signature['nom']} »",
+                                 "contribution": 1.0}],
+                    "message": "QR code falsifié : il prétend venir d'un émetteur officiel, mais la signature ne correspond pas. Ne l'utilisez pas."}
+
+        # émetteur inconnu ou domaine non autorisé : on ne fait pas confiance, au moins SUSPECT
+        resultat = self._analyser_ml(lien)
+        if resultat["verdict"] in ("SÛR", "SUSPECT"):
+            resultat["verdict"] = "SUSPECT"
+        motif = (f"signature d'un émetteur inconnu (« {signature['id']} »)" if signature["statut"] == "inconnu"
+                 else f"le domaine n'appartient pas à « {signature['nom']} »")
+        resultat["raisons"] = [{"raison": motif, "contribution": 1.0}] + resultat.get("raisons", [])
+        resultat["message"] = "Ce QR code se présente comme signé, mais il n'a pas pu être vérifié. Prudence."
+        return resultat
+
+    def _analyser_ml(self, texte: str) -> dict:
         if not ressemble_a_un_lien(texte):
             return {"verdict": "INDÉTERMINÉ", "score": None, "modele": None, "raisons": [],
                     "message": "Ce texte ne ressemble pas à un lien web."}

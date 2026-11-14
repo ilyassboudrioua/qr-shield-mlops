@@ -20,13 +20,14 @@ from src.detecteurs import DetecteurUnifie
 RACINE = Path(__file__).resolve().parent.parent
 DOSSIER_MODELES = Path(os.environ.get("QRS_MODELES", RACINE / "models"))
 DOSSIER_LOGS = Path(os.environ.get("QRS_LOGS", RACINE / "logs"))
+FICHIER_REGISTRE = Path(os.environ.get("QRS_REGISTRE", RACINE / "registre" / "emetteurs.json"))
 DOSSIER_LOGS.mkdir(exist_ok=True)
 TAILLE_MAX_IMAGE = 5 * 1024 * 1024      # 5 Mo
 
 app = FastAPI(title="QR-Shield API",
               description="Un lien ou une image de QR code : un seul module, un seul modèle. Rien n'est ouvert.")
 
-detecteur = DetecteurUnifie(DOSSIER_MODELES)
+detecteur = DetecteurUnifie(DOSSIER_MODELES, FICHIER_REGISTRE)
 
 
 def journaliser(entree, contenu: bytes, resultat: dict, debut: float):
@@ -48,7 +49,7 @@ def journaliser(entree, contenu: bytes, resultat: dict, debut: float):
 
 @app.get("/sante")
 def sante():
-    return {"etat": "ok", "modele": detecteur.infos["modele"]}
+    return {"etat": "ok", "modele": detecteur.infos["modele"], "emetteurs_officiels": len(detecteur.registre)}
 
 
 @app.post("/analyser")

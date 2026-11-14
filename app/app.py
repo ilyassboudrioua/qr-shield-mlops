@@ -11,7 +11,7 @@ import requests
 import streamlit as st
 
 API = os.environ.get("QRS_API", "http://localhost:8000")
-COULEURS = {"SÛR": "#188038", "SUSPECT": "#E37400", "DANGEREUX": "#D93025", "INDÉTERMINÉ": "#5F6368"}
+COULEURS = {"OFFICIEL": "#1A73E8", "SÛR": "#188038", "SUSPECT": "#E37400", "DANGEREUX": "#D93025", "INDÉTERMINÉ": "#5F6368"}
 
 st.set_page_config(page_title="QR-Shield", layout="centered")
 st.title("QR-Shield")
@@ -28,7 +28,8 @@ def afficher(resultat: dict):
     st.markdown(
         f"<div style='padding:14px 18px;border-radius:6px;background:{couleur};color:white;"
         f"font-size:22px;font-weight:700'>{verdict}{texte_score}</div>", unsafe_allow_html=True)
-
+    if resultat.get("emetteur"):
+        st.success(f"Émetteur officiel vérifié : {resultat['emetteur']}")
     if resultat.get("contenu_qr"):
         st.write("**Contenu du QR code :**")
         st.code(resultat["contenu_qr"], language=None)

@@ -10,3 +10,5 @@ uvicorn[standard]
 python-multipart
 streamlit
 requests
+cryptography
+qrcode[pil]

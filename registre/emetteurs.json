@@ -1,0 +1,9 @@
+{
+  "mairie-demo": {
+    "nom": "Mairie de Démo",
+    "domaines": [
+      "mairie-demo.ma"
+    ],
+    "cle_publique": "PaaaoZLk3wDQwaSA3bXDcW5qH0Dvlhl7fzd1jZ30zEM"
+  }
+}
